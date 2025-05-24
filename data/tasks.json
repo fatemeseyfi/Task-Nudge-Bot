@@ -1,8 +1,22 @@
 [
   {
-    "task": "taks1"
+    "task": {
+      "title": "exc1",
+      "category": "exercise"
+    }
   },
   {
-    "task": "taks2"
+    "task": {
+      "title": "exc2",
+      "category": "exercise"
+    }
+  },
+  {
+    "task": {
+      "title": "robot exc",
+      "description": "exc2,3,4 from book",
+      "category": "exercise",
+      "due_date": "2025-05-30T00:00"
+    }
   }
 ]

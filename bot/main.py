@@ -1,19 +1,29 @@
+# main.py
+
 import os
 import asyncio
 import nest_asyncio
-from telegram.ext import ApplicationBuilder, CommandHandler
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ConversationHandler
 from dotenv import load_dotenv
 
-# Apply nest_asyncio for Replit compatibility
 nest_asyncio.apply()
 
-# Import functions from other files
-from handlers import start, add, list_tasks, delete
-from utils import ensure_data_file_initialized, DATA_FILE # Import DATA_FILE from utils
-
+# Import functions and states
+from handlers import (
+    start,
+    list_tasks,
+    delete,
+    add_command_entry,
+    ask_description, # New state handler
+    ask_category,
+    ask_due_date, # New state handler
+    save_full_task, # Renamed and updated final handler
+    cancel_add_task,
+    TITLE, DESCRIPTION, CATEGORY, DUE_DATE # Updated states
+)
+from utils import ensure_data_file_initialized
 
 def main():
-    # Load environment variables
     load_dotenv()
     TOKEN = os.getenv("TELEGRAM_TOKEN")
 
@@ -21,27 +31,29 @@ def main():
         print("Error: TELEGRAM_TOKEN not found. Please set it in your .env file.")
         return
 
-    # Ensure the data file and its directory are initialized
     ensure_data_file_initialized()
 
-    # Build the application
     app = ApplicationBuilder().token(TOKEN).build()
 
-    # Register command handlers
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("add", add))
     app.add_handler(CommandHandler("list", list_tasks))
-    app.add_handler(CommandHandler("delete", delete))
+    app.add_handler(CommandHandler("delete", delete)) # Keep this if you have a delete command
+
+    # Simplified Conversation Handler for adding a task
+    add_task_conversation_handler = ConversationHandler(
+        entry_points=[CommandHandler("add", add_command_entry)],
+        states={
+            TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_description)], # After title, ask description
+            DESCRIPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_category)], # After description, ask category
+            CATEGORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_due_date)], # After category, ask due date
+            DUE_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_full_task)], # After due date, save task
+        },
+        fallbacks=[CommandHandler("cancel", cancel_add_task)],
+    )
+    app.add_handler(add_task_conversation_handler)
 
     print("Bot is running...")
-    # Run the bot (this is an async function, so it needs to be awaited in an async context)
-    # The asyncio.run(main()) at the bottom handles this
-    app.run_polling() # In newer versions, run_polling is not async and handles its own loop
-
+    app.run_polling()
 
 if __name__ == "__main__":
-    # The main() function now contains app.run_polling() which is not async
-    # So, we just call main() directly. asyncio.run() is typically used when
-    # main() itself is an async function and needs to be awaited.
-    # For python-telegram-bot v20+, app.run_polling() handles the event loop.
     main()

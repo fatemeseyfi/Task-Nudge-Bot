@@ -1,104 +1,160 @@
+# handlers.py
+
 import json
 from telegram import Update
-from telegram.ext import ContextTypes
+from telegram.ext import ContextTypes, ConversationHandler
+from datetime import datetime # Import datetime for date formatting
 
-# Import DATA_FILE and ensure_data_file_initialized from utils
-from utils import DATA_FILE, ensure_data_file_initialized
+# Import utility functions
+from utils import load_tasks, save_tasks, parse_datetime_input
 
-# /start
+# Define states for the expanded conversation
+TITLE, DESCRIPTION, CATEGORY, DUE_DATE = range(4) # Now 4 states
+
+# /start (remains unchanged)
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Sends a welcome message and lists available commands."""
-    await update.message.reply_text("سلام! 👋 من بات مدیریت تسک‌هام.\nدستورها:\n/add [تسک]\n/list\n/delete [شماره]")
+    await update.message.reply_text(
+        "سلام! 👋 من بات مدیریت تسک‌هام.\n"
+        "دستورها:\n"
+        "/add - برای اضافه کردن تسک جدید (عنوان و دسته‌بندی)\n"
+        "/list - نمایش لیست تسک‌ها\n"
+        "/delete [شماره] - حذف تسک با استفاده از شماره آن\n" # Adjusted delete to use number again
+        "/cancel - برای لغو عملیات اضافه کردن تسک"
+    )
 
-# /add
-async def add(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Adds a new task to the list."""
-    print("Received /add command")
-    task = " ".join(context.args)
-    if not task:
-        await update.message.reply_text("❗️ لطفاً متن تسک رو وارد کن.")
-        print("No task provided.")
-        return
+# --- Conversation Handler for /add command ---
 
-    print(f"Task received: {task}")
+async def add_command_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Starts the conversation for adding a new task."""
+    context.user_data['current_task_temp'] = {} # Use a temp key for conversation data
+    await update.message.reply_text("عنوان تسک را وارد کنید:")
+    return TITLE
 
-    tasks = [] # Initialize tasks as an empty list by default
+async def ask_description(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Asks for the task description after getting the title."""
+    title = update.message.text
+    if not title:
+        await update.message.reply_text("عنوان نمی‌تواند خالی باشد. لطفاً دوباره عنوان را وارد کنید:")
+        return TITLE
 
-    try:
-        with open(DATA_FILE, "r+") as f:
-            print("Opened data file for reading and writing.")
-            # Attempt to load existing tasks
-            file_content = f.read()
-            if file_content: # Only try to load if file is not empty
-                f.seek(0) # Reset pointer after reading content (if we read it)
-                tasks = json.loads(file_content) # Use json.loads for string
-                print("Loaded tasks from file.")
-            else:
-                print("Data file was empty, starting with an empty task list.")
-                tasks = [] # Ensure it's an empty list if file was truly empty
+    context.user_data['current_task_temp']['title'] = title
+    await update.message.reply_text("توضیحات تسک را وارد کنید (اختیاری):")
+    return DESCRIPTION
 
-            # Add the new task
-            tasks.append({"task": task})
+async def ask_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Asks for the task category after getting the description."""
+    description = update.message.text
+    context.user_data['current_task_temp']['description'] = description if description else "" # Description can be empty
 
-            # Write the updated list back to the file
-            f.seek(0) # Go to the beginning of the file
-            json.dump(tasks, f, indent=2)
-            f.truncate() # Remove any leftover content if the new data is smaller
-            print("Task saved successfully.")
-            await update.message.reply_text(f"✅ تسک اضافه شد: {task}")
+    await update.message.reply_text("دسته‌بندی تسک را وارد کنید (مثال: کار، شخصی، مطالعه):")
+    return CATEGORY
 
-    except FileNotFoundError:
-        await update.message.reply_text("خطا: فایل داده پیدا نشد. لطفاً مطمئن شوید bot/data/tasks.json وجود دارد.")
-        print(f"Error: DATA_FILE '{DATA_FILE}' not found.")
-    except json.JSONDecodeError:
-        await update.message.reply_text("خطا: فرمت فایل داده صحیح نیست. فایل احتمالا خراب شده است.")
-        print("Error: JSON Decode Error, file might be empty or corrupt. Attempting to re-initialize.")
-        ensure_data_file_initialized() # Try to fix it on the fly
-        await update.message.reply_text("فایل داده بازسازی شد. لطفاً دوباره تسک را اضافه کنید.")
-    except Exception as e:
-        await update.message.reply_text(f"خطای ناشناخته‌ای رخ داد: {e}")
-        print(f"An unexpected error occurred: {e}")
+async def ask_due_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Asks for the due date after getting the category."""
+    category = update.message.text
+    if not category:
+        await update.message.reply_text("دسته‌بندی نمی‌تواند خالی باشد. لطفاً دوباره دسته‌بندی را وارد کنید:")
+        return CATEGORY
 
-# /list
+    context.user_data['current_task_temp']['category'] = category
+    await update.message.reply_text("تاریخ و زمان سررسید را وارد کنید (اختیاری، مثال: 2025-06-01 20:00 یا 2025-06-01):")
+    return DUE_DATE
+
+async def save_full_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Finalizes and saves the new task with all details."""
+    due_date_str = update.message.text
+    parsed_due_date = parse_datetime_input(due_date_str)
+
+    # If user provided something but it's invalid
+    if due_date_str and not parsed_due_date:
+        await update.message.reply_text(
+            "فرمت تاریخ و زمان سررسید نامعتبر است. لطفاً از فرمت 'YYYY-MM-DD HH:MM' یا 'YYYY-MM-DD' استفاده کنید یا خالی بگذارید:"
+        )
+        return DUE_DATE # Stay in the same state if input is invalid
+
+    context.user_data['current_task_temp']['due_date'] = parsed_due_date.isoformat(timespec='minutes') if parsed_due_date else ""
+
+    # Construct the task in the desired nested format
+    new_task_data = {
+        "task": {
+            "title": context.user_data['current_task_temp']['title'],
+            "description": context.user_data['current_task_temp']['description'],
+            "category": context.user_data['current_task_temp']['category'],
+            "due_date": context.user_data['current_task_temp']['due_date']
+        }
+    }
+
+    # Load existing tasks, add the new one, and save
+    tasks = load_tasks()
+    tasks.append(new_task_data)
+    save_tasks(tasks)
+
+    await update.message.reply_text(
+        f"✅ تسک '{new_task_data['task']['title']}' با دسته‌بندی '{new_task_data['task']['category']}' اضافه شد!"
+    )
+
+    # Clear user data for the current task
+    del context.user_data['current_task_temp']
+    return ConversationHandler.END # End the conversation
+
+async def cancel_add_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Cancels the task addition process."""
+    if 'current_task_temp' in context.user_data:
+        del context.user_data['current_task_temp']
+    await update.message.reply_text("عملیات اضافه کردن تسک لغو شد.")
+    return ConversationHandler.END
+
+# --- End of Conversation Handler ---
+
+### `/list` Command (Adjusted)
 async def list_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Lists all current tasks."""
-    try:
-        with open(DATA_FILE, "r") as f:
-            tasks = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        tasks = [] # If file not found or corrupt, treat as empty
+    """Lists all current tasks, displaying only their titles and categories."""
+    tasks = load_tasks()
 
     if not tasks:
         await update.message.reply_text("📭 لیست تسک‌ها خالیه.")
         return
 
-    # Format tasks for display
-    message = "\n".join([f"{i+1}. {t['task']}" for i, t in enumerate(tasks)])
-    await update.message.reply_text("📝 لیست تسک‌ها:\n" + message)
+    message_parts = ["📝 لیست تسک‌ها:"]
+    for i, item in enumerate(tasks):
+        task_data = item.get('task') 
+        if task_data and isinstance(task_data, dict):
+            title = task_data.get('title', 'بدون عنوان')
+            message_parts.append(f"{i+1}. {title}")
+        else:
+            message_parts.append(f"{i+1}. تسک نامعتبر")
 
-# /delete
+    import re
+    def escape_md(text: str) -> str:
+        escape_chars = r'_*[]()~`>#+-=|{}.!\\'
+        return re.sub(rf'([{re.escape(escape_chars)}])', r'\\\1', text)
+
+    final_message_parts = [escape_md(part) for part in message_parts]
+
+    await update.message.reply_markdown_v2("\n".join(final_message_parts))
+
+
+# /delete (Adjusted to use index again as in your original simplified bot)
 async def delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Deletes a task by its number."""
     try:
-        # Get the task index from command arguments (e.g., /delete 1)
-        index = int(context.args[0]) - 1 
+        index = int(context.args[0]) - 1 # Get index from 1-based user input
     except (IndexError, ValueError):
-        await update.message.reply_text("❗️ لطفاً شماره تسک رو وارد کن.")
+        await update.message.reply_text("❗️ لطفاً شماره تسک رو وارد کن. مثال: /delete 1")
         return
 
-    try:
-        with open(DATA_FILE, "r+") as f:
-            tasks = json.load(f) # Load all tasks
-            if 0 <= index < len(tasks):
-                removed = tasks.pop(index) # Remove the task
-                f.seek(0) # Go to the beginning of the file
-                json.dump(tasks, f, indent=2) # Write updated tasks
-                f.truncate() # Trim any leftover data
-                await update.message.reply_text(f"🗑 حذف شد: {removed['task']}")
-            else:
-                await update.message.reply_text("❗️ شماره معتبر نیست.")
-    except (FileNotFoundError, json.JSONDecodeError):
-        await update.message.reply_text("خطا: لیست تسک‌ها خالی است یا فایل داده خراب است.")
-    except Exception as e:
-        await update.message.reply_text(f"خطای ناشناخته‌ای رخ داد: {e}")
-        print(f"An unexpected error occurred in delete: {e}")
+    tasks = load_tasks()
+
+    if 0 <= index < len(tasks):
+        removed_item = tasks.pop(index)
+        save_tasks(tasks)
+
+        # Try to get the title of the removed task for confirmation
+        removed_title = "تسک نامشخص"
+        if removed_item and isinstance(removed_item.get('task'), dict):
+            removed_title = removed_item['task'].get('title', 'تسک نامشخص')
+
+        await update.message.reply_text(f"🗑 حذف شد: {removed_title}")
+    else:
+        await update.message.reply_text("❗️ شماره معتبر نیست.")
